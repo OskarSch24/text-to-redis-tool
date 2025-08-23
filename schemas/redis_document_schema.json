@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Redis Document Schema für Text-zu-Redis Transformation",
   "description": "JSON-Schema zur Validierung von Redis-Dokumenten aus Markdown-Transformation",
-  "version": "1.0.0",
+  "version": "1.1.0",
   
   "definitions": {
     "redis_key_pattern": {
@@ -13,8 +13,8 @@
     
     "redis_set_key_pattern": {
       "type": "string", 
-      "pattern": "^[a-z][a-z0-9_:]{1,50}:(children|sequence|next|previous|siblings|chunks|docs)$",
-      "description": "Redis-Set-Key-Format für Beziehungen"
+      "pattern": "^[a-z][a-z0-9_:]{1,50}:(children|sequence|next|previous|siblings)$",
+      "description": "Redis-Set-Key-Format für Beziehungen (IMMER :children, nie :chapters)"
     },
     
     "hierarchy_level": {
@@ -29,7 +29,7 @@
       "description": "Datum im Format YYYY-MM-DD"
     },
     
-    "language_code": {
+    "language": {
       "type": "string",
       "pattern": "^[a-z]{2}$",
       "description": "ISO 639-1 Sprach-Code (z.B. 'de', 'en')"
@@ -89,7 +89,7 @@
           "description": "Thematische Kategorie (optional)"
         },
         "language": {
-          "$ref": "#/definitions/language_code",
+          "$ref": "#/definitions/language",
           "default": "de",
           "description": "Sprach-Code des Dokuments"
         },
@@ -103,17 +103,6 @@
           "maxItems": 20,
           "uniqueItems": true,
           "description": "Such-Tags aus YAML Front Matter"
-        },
-        "source_file": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 255,
-          "description": "Original Markdown-Dateiname (optional)"
-        },
-        "word_count": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Gesamte Wortanzahl des Dokuments (optional)"
         }
       },
       "additionalProperties": false
@@ -137,7 +126,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 10000,
-          "description": "VOLLSTÄNDIGER Originaltext ohne Kürzung"
+          "description": "VOLLSTÄNDIGER Originaltext ohne Kürzung. Headers MIT Content: '# Header\\n\\nContent', reiner Content OHNE Header: 'Content'"
         },
         "level": {
           "$ref": "#/definitions/hierarchy_level",
@@ -153,7 +142,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1000,
-          "description": "Relative Position innerhalb des Parent-Elements"
+          "description": "Relative Position innerhalb des Parent-Elements (PFLICHT bei parent)"
         },
         "title": {
           "type": "string",
@@ -190,16 +179,6 @@
           "type": "string",
           "maxLength": 200,
           "description": "Dokument-Titel für RAG-Kontext"
-        },
-        "word_count": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Wortanzahl dieses Chunks (optional)"
-        },
-        "character_count": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Zeichenanzahl dieses Chunks (optional)"
         }
       },
       "additionalProperties": false,
@@ -211,10 +190,10 @@
             }
           },
           "then": {
-            "not": {"required": ["parent"]}
+            "not": {"required": ["parent", "sequence_in_parent"]}
           },
           "else": {
-            "required": ["parent"]
+            "required": ["parent", "sequence_in_parent"]
           }
         },
         {
@@ -294,7 +273,7 @@
       "properties": {
         "key": {
           "$ref": "#/definitions/redis_set_key_pattern",
-          "description": "Redis-Set-Key für Beziehungstyp"
+          "description": "Redis-Set-Key für Beziehungstyp (IMMER :children für Hierarchie)"
         },
         "members": {
           "type": "array",
@@ -313,10 +292,7 @@
             "sequence", 
             "next",
             "previous",
-            "siblings",
-            "chunks",
-            "docs",
-            "all_descendants"
+            "siblings"
           ],
           "description": "Art der Beziehung zwischen Elementen"
         },
@@ -348,25 +324,12 @@
       "value": {
         "key": "ch:risk_management_fundamentals:001",
         "parent": "doc:portfolio_management_strategies:001",
-        "text": "# Risk Management Fundamentals\n\nDiversifikation ist der Grundstein erfolgreicher Investments. Ein ausgewogenes Portfolio reduziert das Gesamtrisiko durch geschickte Verteilung der Investments auf verschiedene Anlageklassen.",
+        "text": "# Risk Management Fundamentals\n\nDiversifikation ist der Grundstein erfolgreicher Investments.",
         "level": "chapter",
         "position": 1,
+        "sequence_in_parent": 1,
         "title": "Risk Management Fundamentals",
         "chapter_number": 1,
-        "context_document": "Portfolio Management Strategies"
-      }
-    },
-    {
-      "title": "Beispiel Redis Chunk (Content)",
-      "value": {
-        "key": "chunk:diversifikation_ist_grundstein:001",
-        "parent": "subpara:volatility_measures:001",
-        "text": "Diversifikation ist der Grundstein erfolgreicher Investments und reduziert systematisch das Portfoliorisiko.",
-        "level": "chunk",
-        "position": 15,
-        "sequence_in_parent": 3,
-        "context_title": "Volatility Measures", 
-        "context_chapter": "Risk Management Fundamentals",
         "context_document": "Portfolio Management Strategies"
       }
     },
@@ -381,20 +344,6 @@
         ],
         "relationship_type": "children",
         "parent_key": "ch:risk_management_fundamentals:001"
-      }
-    },
-    {
-      "title": "Beispiel Redis Set (Sequence)",
-      "value": {
-        "key": "doc:portfolio_management_strategies:001:sequence",
-        "members": [
-          "ch:risk_management_fundamentals:001",
-          "para:portfolio_theory:001",
-          "subpara:diversification_methods:001",
-          "chunk:diversifikation_ist_grundstein:001",
-          "chunk:korrelation_reduziert_risiko:002"
-        ],
-        "relationship_type": "sequence"
       }
     }
   ],
@@ -414,13 +363,13 @@
       },
       {
         "name": "sequence_in_parent_consistency",
-        "description": "sequence_in_parent muss innerhalb eines Parents eindeutig sein",
-        "constraint": "Alle sequence_in_parent-Werte eines Parents müssen aufsteigend und lückenlos sein"
+        "description": "sequence_in_parent muss innerhalb eines Parents eindeutig und lückenlos sein",
+        "constraint": "Alle sequence_in_parent-Werte eines Parents müssen bei 1 beginnen und lückenlos sein"
       },
       {
         "name": "text_preservation",
         "description": "Text darf niemals gekürzt oder zusammengefasst werden",
-        "constraint": "text-Feld muss kompletten Originaltext enthalten ohne Änderungen"
+        "constraint": "text-Feld muss kompletten Originaltext enthalten. Headers MIT Content: '# Header\\n\\nContent'"
       },
       {
         "name": "set_member_existence",
@@ -428,9 +377,9 @@
         "constraint": "Jeder Key in members-Array muss einem validen Redis-Objekt entsprechen"
       },
       {
-        "name": "navigation_bidirectionality",
-        "description": "Next/Previous-Sets müssen bidirektional konsistent sein",
-        "constraint": "Wenn A:next=[B], dann muss B:previous=[A] existieren"
+        "name": "children_set_naming",
+        "description": "Hierarchie-Sets müssen :children verwenden",
+        "constraint": "NIEMALS :chapters, :paragraphs etc. - IMMER :children"
       }
     ]
   },
@@ -447,52 +396,22 @@
       "example": "chunk ohne parent-Feld bei level='chunk'"
     },
     "E003": {
-      "message": "Hierarchie-Ebenen-Konflikt",
-      "description": "Parent hat niedrigere oder gleiche Hierarchie-Ebene wie Child",
-      "example": "chunk mit parent vom level='chunk'"
+      "message": "Fehlende sequence_in_parent",
+      "description": "Element mit Parent hat keine sequence_in_parent",
+      "example": "chunk mit parent aber ohne sequence_in_parent"
     },
     "E004": {
-      "message": "Position-Duplikat",
-      "description": "Zwei Chunks haben die gleiche position im selben Dokument",
-      "example": "position=5 kommt mehrfach vor"
-    },
-    "E005": {
-      "message": "Position-Lücke",
-      "description": "Position-Werte haben Lücken in der Sequenz",
-      "example": "position: 1,2,4,5 (3 fehlt)"
-    },
-    "E006": {
-      "message": "Text-Kürzung erkannt",
-      "description": "Text-Feld scheint gekürzt oder zusammengefasst zu sein",
-      "example": "Originaltext 500 Zeichen, text-Feld nur 50 Zeichen"
-    },
-    "E007": {
-      "message": "Set-Member nicht gefunden",
-      "description": "Set referenziert nicht-existierenden Key",
-      "example": "members=[chunk:invalid:001] aber chunk existiert nicht"
-    },
-    "E008": {
-      "message": "Navigation-Inkonsistenz",
-      "description": "Next/Previous-Sets sind nicht bidirektional",
-      "example": "A:next=[B] aber B:previous fehlt oder zeigt auf anderen Key"
-    },
-    "E009": {
-      "message": "Ungültiger Set-Key",
-      "description": "Set-Key entspricht nicht dem erwarteten Format",
-      "example": "invalid_set_key statt parent:children"
-    },
-    "E010": {
-      "message": "Titel fehlt bei Header-Element",
-      "description": "Chapter/Paragraph/SubParagraph benötigt title-Feld",
-      "example": "level='chapter' aber title-Feld fehlt"
+      "message": "Falscher Set-Name",
+      "description": "Set verwendet :chapters statt :children",
+      "example": "doc:example:001:chapters statt doc:example:001:children"
     }
   },
   
   "performance_constraints": {
     "max_chunk_size": {
-      "value": 10000,
+      "value": 2000,
       "unit": "characters",
-      "description": "Maximale Textlänge pro Chunk für Redis-Performance"
+      "description": "Empfohlene maximale Textlänge pro Chunk für optimale RAG-Performance"
     },
     "max_chunks_per_document": {
       "value": 10000,
@@ -509,53 +428,5 @@
       "unit": "characters", 
       "description": "Empfohlene Chunk-Größe für optimale RAG-Performance"
     }
-  },
-  
-  "redis_command_templates": {
-    "json_set": {
-      "template": "JSON.SET {key} $ '{json_value}'",
-      "description": "Redis-Command zum Speichern von JSON-Objekten",
-      "example": "JSON.SET doc:portfolio_strategies:001 $ '{\"title\":\"Portfolio Strategies\",\"author\":\"Oskar\"}'"
-    },
-    "sadd": {
-      "template": "SADD {set_key} {member1} {member2} ...",
-      "description": "Redis-Command zum Hinzufügen von Set-Members",
-      "example": "SADD doc:portfolio_strategies:001:children ch:risk_management:001 ch:implementation:002"
-    },
-    "batch_upload": {
-      "template": "MULTI\n{commands}\nEXEC",
-      "description": "Redis-Transaction für Batch-Upload",
-      "example": "MULTI\nJSON.SET doc:test:001 $ '{...}'\nSADD doc:test:001:children ch:test:001\nEXEC"
-    }
-  },
-  
-  "testing_scenarios": {
-    "minimal_valid_document": {
-      "description": "Kleinstes gültiges Dokument für Basis-Tests",
-      "schema_refs": ["redis_document", "redis_chunk"],
-      "required_objects": 2
-    },
-    "complex_hierarchy": {
-      "description": "Vollständige Hierarchie mit allen Ebenen",
-      "schema_refs": ["redis_document", "redis_chunk", "redis_set"],
-      "required_objects": 15,
-      "hierarchy_depth": 5
-    },
-    "large_document": {
-      "description": "Großes Dokument für Performance-Tests",
-      "schema_refs": ["redis_document", "redis_chunk", "redis_set"],
-      "required_objects": 1000,
-      "test_constraints": ["performance_constraints"]
-    },
-    "edge_cases": {
-      "description": "Grenzfälle und Sondersituationen",
-      "scenarios": [
-        "empty_content_chunks",
-        "special_characters_in_text",
-        "very_long_titles", 
-        "deep_nesting_hierarchies",
-        "single_sentence_paragraphs"
-      ]
-    }
   }
-} 
+}
